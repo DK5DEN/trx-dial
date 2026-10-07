@@ -1,0 +1,13 @@
+# build output
+firmware/.pio/
+firmware/dist/
+out/
+
+# never publish: rebuilt third-party APKs and signing keys
+dist/
+*.apk
+*.jks
+*.keystore
+
+# JaYTrX integration prototype, kept out of the public repo (gist)
+app-patch/
