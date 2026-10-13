@@ -54,7 +54,7 @@ volume and mute; afu-remote: tune and change the step).
 | `min`, `max`, `step`, `unit` | `range` only; `step` defaults to 1 |
 | `icon` | optional: `speaker`, `mute`, `list`, `lock`, `wave`, `mode`, `band`, `filter`, `memory`, `gear`; unknown or missing gives a neutral symbol |
 
-The dial adds its own items (brightness, beeps, back) after the host's.
+The dial adds its own items (brightness, beeps, call layout, back) after the host's.
 A host never puts items into the menu that transmit or that need a
 confirmation.
 
@@ -83,7 +83,7 @@ Only changed keys need to be sent.
 | `pill`, `pill2` | box at the bottom: `pill` in the accent colour, `pill2` after it in white (TG number + name, step + mode) |
 | `accent` | colour of `pill` and gauge: `green`, `yellow`, `orange`, `red`, `blue` |
 | `ring` | outer ring: `off` (not connected), `idle`, `rx`, `tx` |
-| `banner` | text in a coloured box at the top while `ring` is `rx` or `tx` (talker call, "SENDEN") |
+| `banner` | text in a coloured box at the top while `ring` is `rx` or `tx` (talker call, "SENDEN"). With the dial's call layout switched on, the last `banner` stays large in the centre instead, `pill` moves under it and `big`/`label` into the box at the bottom |
 | `muted` | 1: show the mute symbol instead of `big` |
 
 Only changed keys need to be sent; missing keys keep their last value.

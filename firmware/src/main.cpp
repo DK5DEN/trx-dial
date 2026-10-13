@@ -47,7 +47,7 @@ static uint16_t named(const String &n) {
 
 // ---- screens and menu entries ----
 enum class Mode { Home, Menu, List, Range, Bright };
-enum class Local { None, Bright, Sound, Back };
+enum class Local { None, Bright, Sound, Layout, Back };
 
 struct Entry {
     int host;                   // index into dlink::menu, or -1 for a local entry
@@ -69,6 +69,8 @@ static String pendingVal;           // list value sent, until the host confirms
 static uint32_t pendingAt = 0;
 static int brightness = 140;
 static bool soundOn = true;
+static bool callLayout = false;     // home: call sign large in the centre, value in the bottom pill
+static String lastCall;             // last banner (talker call), kept while idle
 static int turnAcc = 0;
 static uint32_t turnSentAt = 0;
 static uint32_t lastInput = 0;
@@ -90,6 +92,7 @@ static void buildEntries() {
     for (size_t i = 0; i < dlink::menu.size(); i++) entries.emplace_back((int)i, Local::None);
     entries.emplace_back(-1, Local::Bright);
     entries.emplace_back(-1, Local::Sound);
+    entries.emplace_back(-1, Local::Layout);
     entries.emplace_back(-1, Local::Back);
     if (menuSel >= (int)entries.size()) menuSel = 0;
 }
@@ -221,6 +224,11 @@ static void iconNote(int x, int y, uint16_t c, bool crossed) {
     if (crossed) canvas.drawWideLine(x - 16, y - 16, x + 16, y + 16, 2.2f, C_RED);
 }
 
+static void iconCall(int x, int y, uint16_t c) {
+    text("CALL", x, y, FONT_SMALL, c, 50);
+    canvas.drawRoundRect(x - 22, y - 11, 44, 22, 6, c);
+}
+
 static void iconBack(int x, int y, uint16_t c) {
     canvas.drawWideLine(x - 12, y, x + 14, y, 2.4f, c);
     canvas.drawWideLine(x - 12, y, x - 2, y - 10, 2.4f, c);
@@ -295,6 +303,7 @@ static void entryIcon(const Entry &e, int x, int y, uint16_t c) {
     if (e.host >= 0) { hostIcon(dlink::menu[e.host], x, y, c); return; }
     if (e.local == Local::Bright) iconSun(x, y, c);
     else if (e.local == Local::Sound) iconNote(x, y, c, !soundOn);
+    else if (e.local == Local::Layout) iconCall(x, y, c);
     else iconBack(x, y, c);
 }
 
@@ -302,6 +311,7 @@ static String entryLabel(const Entry &e) {
     if (e.host >= 0) return dlink::menu[e.host].label;
     if (e.local == Local::Bright) return "Helligkeit";
     if (e.local == Local::Sound) return "Quittungstöne";
+    if (e.local == Local::Layout) return "Call groß";
     return "Zurück";
 }
 
@@ -321,7 +331,7 @@ static void drawRing() {
 /// Top line: banner while receiving/sending, otherwise the host's status line.
 static void drawHeader() {
     const Home &h = dlink::home;
-    if (h.banner.length() && (h.ring == "rx" || h.ring == "tx")) {
+    if (!callLayout && h.banner.length() && (h.ring == "rx" || h.ring == "tx")) {
         bool tx = h.ring == "tx";
         pill(40, 24, tx ? C_RED : C_GREEN, h.banner, FONT_TEXT, tx ? C_FG : C_BG, 150);
     } else if (h.top.length()) {
@@ -329,11 +339,35 @@ static void drawHeader() {
     }
 }
 
-static void drawHome() {
+/// Width of pill + pill2 drawn as one line (pill in f1, pill2 in f2), at most maxW.
+static int pillWidth(const lgfx::IFont *f1, const lgfx::IFont *f2, int maxW) {
+    const Home &h = dlink::home;
+    canvas.setFont(f1);
+    int w = min((int)canvas.textWidth(h.pill), maxW);
+    canvas.setFont(f2);
+    if (h.pill2.length()) w += canvas.textWidth(h.pill2) + 8;
+    return min(w, maxW);
+}
+
+/// pill + pill2 as one centred line, pill in the accent colour, pill2 in white.
+static void pillText(int y, const lgfx::IFont *f1, const lgfx::IFont *f2, uint16_t ac, int maxW) {
+    const Home &h = dlink::home;
+    canvas.setFont(f1);
+    int w1 = min((int)canvas.textWidth(h.pill), maxW);
+    int x = CX - pillWidth(f1, f2, maxW) / 2;
+    text(h.pill, x, y, f1, ac, maxW, middle_left);
+    if (h.pill2.length()) text(h.pill2, x + w1 + 8, y, f2, C_FG, max(10, maxW - w1 - 8), middle_left);
+}
+
+/// Rounded panel at the bottom of the home screen.
+static void bottomPanel(int w) {
+    canvas.fillSmoothRoundRect(CX - w / 2 - 12, CY + 54 - 15, w + 24, 30, 15, C_PANEL);
+}
+
+/// Default layout: big value in the centre, label under it, pill at the bottom.
+static void drawHomeValue() {
     const Home &h = dlink::home;
     uint16_t ac = named(h.accent);
-    if (h.hasGauge) gauge(h.gauge, h.gaugeMax, h.muted ? C_ORANGE : ac, 108, 96);
-    drawHeader();
     if (h.muted) {
         iconSpeaker(CX - 2, CY - 6, C_ORANGE, true);
         centered("STUMM", CY + 28, FONT_TEXT, C_ORANGE);
@@ -342,17 +376,48 @@ static void drawHome() {
         if (h.label.length()) centered(h.label, CY + 28, FONT_SMALL, C_DIM, 160);
     }
     if (h.pill.length() || h.pill2.length()) {
-        int y = CY + 54;
-        canvas.setFont(FONT_TEXT);
-        int w1 = canvas.textWidth(h.pill);
-        canvas.setFont(FONT_SMALL);
-        int w2 = h.pill2.length() ? canvas.textWidth(h.pill2) + 8 : 0;
-        int w = min(w1 + w2, 130);
-        canvas.fillSmoothRoundRect(CX - w / 2 - 12, y - 15, w + 24, 30, 15, C_PANEL);
-        int x = CX - w / 2;
-        text(h.pill, x, y + 1, FONT_TEXT, ac, 130, middle_left);
-        if (h.pill2.length()) text(h.pill2, x + w1 + 8, y + 1, FONT_SMALL, C_FG, max(10, 130 - w1 - 8), middle_left);
+        bottomPanel(pillWidth(FONT_TEXT, FONT_SMALL, 130));
+        pillText(CY + 55, FONT_TEXT, FONT_SMALL, ac, 130);
     }
+}
+
+/// Call layout: the banner (talker call) large in the centre, pill (talkgroup)
+/// under it, the host's big value and label in the panel at the bottom.
+static void drawHomeCall() {
+    const Home &h = dlink::home;
+    uint16_t ac = named(h.accent);
+    bool live = h.banner.length() && (h.ring == "rx" || h.ring == "tx");
+    if (lastCall.length()) {
+        uint16_t c = !live ? C_FG : h.ring == "tx" ? C_RED : C_GREEN;
+        bigValue(lastCall, CY - 8, c, h.hasGauge ? 170 : 200);
+    } else {
+        centered("—", CY - 8, FONT_BIG, C_FAINT);
+    }
+    if (h.pill.length() || h.pill2.length()) pillText(CY + 30, FONT_TEXT, FONT_TEXT, ac, 170);
+    if (h.muted) {
+        canvas.setFont(FONT_TEXT);
+        bottomPanel(canvas.textWidth("STUMM") + 4);
+        centered("STUMM", CY + 55, FONT_TEXT, C_ORANGE);
+    } else if (h.big.length() || h.label.length()) {
+        canvas.setFont(FONT_SMALL);
+        int w1 = h.label.length() ? canvas.textWidth(h.label) + 8 : 0;
+        canvas.setFont(FONT_TEXT);
+        int w2 = canvas.textWidth(h.big);
+        int w = min(w1 + w2, 130);
+        bottomPanel(w);
+        int x = CX - w / 2;
+        if (h.label.length()) text(h.label, x, CY + 55, FONT_SMALL, C_DIM, 130, middle_left);
+        text(h.big, x + w1, CY + 55, FONT_TEXT, C_FG, max(10, 130 - w1), middle_left);
+    }
+}
+
+static void drawHome() {
+    const Home &h = dlink::home;
+    if (h.banner.length()) lastCall = h.banner;
+    if (h.hasGauge) gauge(h.gauge, h.gaugeMax, h.muted ? C_ORANGE : named(h.accent), 108, 96);
+    drawHeader();
+    if (callLayout) drawHomeCall();
+    else drawHomeValue();
 }
 
 /// State of an entry as a short pill under its label in the menu.
@@ -360,6 +425,7 @@ static String entryState(const Entry &e, bool &on, bool &isToggle) {
     isToggle = false;
     if (e.host < 0) {
         if (e.local == Local::Sound) { isToggle = true; on = soundOn; return on ? "AN" : "AUS"; }
+        if (e.local == Local::Layout) { isToggle = true; on = callLayout; return on ? "AN" : "AUS"; }
         if (e.local == Local::Bright) return String(brightness * 100 / 255) + " %";
         return "";
     }
@@ -514,6 +580,7 @@ static void runEntry(const Entry &e) {
     if (e.host < 0) {
         if (e.local == Local::Bright) setMode(Mode::Bright);
         else if (e.local == Local::Sound) { soundOn = !soundOn; prefs.putBool("sound", soundOn); beep(2400, 30); }
+        else if (e.local == Local::Layout) { callLayout = !callLayout; prefs.putBool("calllayout", callLayout); }
         else setMode(Mode::Home);
         return;
     }
@@ -670,6 +737,7 @@ void setup() {
     prefs.begin("dial", false);
     brightness = prefs.getUChar("bright", 140);
     soundOn = prefs.getBool("sound", true);
+    callLayout = prefs.getBool("calllayout", false);
     board::setBrightness(brightness);
     canvas.setColorDepth(16);
     canvas.createSprite(board::width(), board::height());
