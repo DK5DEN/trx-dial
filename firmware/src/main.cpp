@@ -73,6 +73,8 @@ static bool soundOn = true;
 static bool callLayout = false;     // home: call sign large in the centre, value in the bottom pill
 static String lastCall;             // last banner (talker call), kept while idle on the same talkgroup
 static String lastPill;             // pill of the talkgroup lastCall belongs to
+static bool marqueeActive = false;  // a marquee is scrolling: keep redrawing
+static uint32_t marqueeAt = 0;
 static int turnAcc = 0;
 static uint32_t turnSentAt = 0;
 static uint32_t lastInput = 0;
@@ -193,6 +195,27 @@ static String drawCall(const String &call, int y, uint16_t col, int maxW) {
     text(main, x, y, f, col, maxW, middle_left);
     text(suffix, x + w1 + 4, bottom, FONT_NUMXS, C_DIM, w2, bottom_left);   // baselines aligned
     return "";
+}
+
+/// Text centred when it fits into maxW, otherwise scrolled through a window of
+/// maxW: pause, run to the end, pause, jump back. State per use site.
+struct Marquee { String key; uint32_t t0 = 0; };
+static void marquee(Marquee &m, const String &s, int y, const lgfx::IFont *f, uint16_t col, int maxW) {
+    canvas.setFont(f);
+    int w = canvas.textWidth(s);
+    if (w <= maxW) { centered(s, y, f, col, maxW); return; }
+    if (s != m.key) { m.key = s; m.t0 = millis(); }
+    const uint32_t PAUSE = 1500, SPEED = 30;      // ms, px/s
+    uint32_t run = (uint32_t)(w - maxW) * 1000 / SPEED;
+    uint32_t t = (millis() - m.t0) % (PAUSE + run + PAUSE);
+    int off = t < PAUSE ? 0 : t < PAUSE + run ? (int)((t - PAUSE) * SPEED / 1000) : w - maxW;
+    int h = canvas.fontHeight(), x0 = CX - maxW / 2;
+    canvas.setClipRect(x0, y - h / 2, maxW, h);
+    canvas.setTextColor(col);
+    canvas.setTextDatum(middle_left);
+    canvas.drawString(s, x0 - off, y);
+    canvas.clearClipRect();
+    marqueeActive = true;
 }
 
 /// Segmented 270° gauge (gap at the bottom).
@@ -438,7 +461,8 @@ static void drawHomeCall() {
     } else {
         centered("—", CY - 14, FONT_BIG, C_FAINT);
     }
-    if (tgName.length()) centered(tgName, CY + 36, FONT_TEXT, ac, 170);
+    static Marquee mqTg;
+    if (tgName.length()) marquee(mqTg, tgName, CY + 36, FONT_TEXT, ac, 170);
     if (h.muted) {
         canvas.setFont(FONT_TEXT);
         panel(CY + 59, 28, canvas.textWidth("STUMM") + 4);
@@ -560,6 +584,7 @@ static void drawOffline() {
 }
 
 static void render() {
+    marqueeActive = false;
     canvas.fillScreen(C_BG);
     drawRing();
     if (!dlink::linked) drawOffline();
@@ -764,6 +789,7 @@ static void tick() {
         }
         dirty = true;
     }
+    if (marqueeActive && now - marqueeAt > 40) { marqueeAt = now; dirty = true; }   // ~25 fps while scrolling
     static uint32_t animAt = 0;                    // offline animation
     if (!dlink::linked && now - animAt > 120) { animAt = now; dirty = true; }
 }
