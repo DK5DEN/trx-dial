@@ -83,7 +83,7 @@ Only changed keys need to be sent.
 | `pill`, `pill2` | box at the bottom: `pill` in the accent colour, `pill2` after it in white (TG number + name, step + mode) |
 | `accent` | colour of `pill` and gauge: `green`, `yellow`, `orange`, `red`, `blue` |
 | `ring` | outer ring: `off` (not connected), `idle`, `rx`, `tx` |
-| `banner` | text in a coloured box at the top while `ring` is `rx` or `tx` (talker call, "SENDEN"). With the dial's call layout switched on, the last `banner` stays large in the centre instead, `pill` moves under it and `big`/`label` into the box at the bottom |
+| `banner` | text in a coloured box at the top while `ring` is `rx` or `tx` (talker call, "SENDEN"). With the dial's call layout switched on, the last `banner` stays in the centre instead: the part before its first space large (call), the rest under it (name); `pill` is split into number and name around it and `big`/`label` go into the box at the bottom |
 | `muted` | 1: show the mute symbol instead of `big` |
 
 Only changed keys need to be sent; missing keys keep their last value.

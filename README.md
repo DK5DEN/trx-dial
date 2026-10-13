@@ -24,10 +24,11 @@ or needs a confirmation.
   switches toggle in place.
 - The dial adds its own entries after the host's: brightness, confirmation beeps,
   "Call groß" (call layout), back.
-- **Call layout** (menu, `Call groß`, kept in flash): the last received call sign is
-  shown large in the centre (green while receiving, red while sending), the talkgroup
-  under it, and the host's value (volume) in the box at the bottom. Off by default,
-  which keeps the value (volume, VFO frequency) in the centre.
+- **Call layout** (menu, `Call groß`, kept in flash), top to bottom: talkgroup number,
+  the last received call sign large (green while receiving, red while sending; a
+  `-SSID` suffix small after it), the talker's name, the talkgroup name, and the host's
+  value (volume) in the box at the bottom. Off by default, which keeps the value
+  (volume, VFO frequency) in the centre.
 - Every screen falls back to the home screen after 8 s without input.
 - Outer ring: blue = connected, green = receiving, red = transmitting, grey = not connected.
 

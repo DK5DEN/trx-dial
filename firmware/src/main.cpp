@@ -15,6 +15,7 @@
 #define FONT_HUGE  (&fonts::DejaVu56)
 #define FONT_NUM   (&fonts::DejaVu40)
 #define FONT_NUMS  (&fonts::DejaVu24)
+#define FONT_NUMXS (&fonts::DejaVu18)
 #define FONT_BIG   (&fonts::efontJA_24_b)
 #define FONT_TEXT  (&fonts::efontJA_16_b)
 #define FONT_SMALL (&fonts::efontJA_12)
@@ -70,7 +71,8 @@ static uint32_t pendingAt = 0;
 static int brightness = 140;
 static bool soundOn = true;
 static bool callLayout = false;     // home: call sign large in the centre, value in the bottom pill
-static String lastCall;             // last banner (talker call), kept while idle
+static String lastCall;             // last banner (talker call), kept while idle on the same talkgroup
+static String lastPill;             // pill of the talkgroup lastCall belongs to
 static int turnAcc = 0;
 static uint32_t turnSentAt = 0;
 static uint32_t lastInput = 0;
@@ -105,6 +107,11 @@ static void setMode(Mode m) {
 
 // ------------------------------------------------------------- primitives
 
+static bool asciiOnly(const String &s) {
+    for (size_t i = 0; i < s.length(); i++) if ((uint8_t)s[i] >= 0x80) return false;
+    return true;
+}
+
 static void utf8Chop(String &t) {
     int i = t.length() - 1;
     while (i > 0 && (t[i] & 0xC0) == 0x80) i--;
@@ -119,7 +126,7 @@ static void text(const String &s, int x, int y, const lgfx::IFont *f, uint16_t c
     String t = s;
     bool cut = false;
     while (t.length() > 1 && canvas.textWidth(t) > maxW) { utf8Chop(t); cut = true; }
-    if (cut && t.length() > 1) { utf8Chop(t); t += "…"; }
+    if (cut && t.length() > 1) { utf8Chop(t); t += asciiOnly(s) ? "..." : "…"; }  // DejaVu has no "…"
     canvas.drawString(t, x, y);
 }
 
@@ -138,16 +145,54 @@ static const lgfx::IFont *fit(const String &s, int maxW, std::initializer_list<c
     return last;
 }
 
-static bool asciiOnly(const String &s) {
-    for (size_t i = 0; i < s.length(); i++) if ((uint8_t)s[i] >= 0x80) return false;
-    return true;
-}
-
 /// Big centred value: DejaVu for plain ASCII (numbers, frequencies), efont otherwise.
 static void bigValue(const String &s, int y, uint16_t col, int maxW) {
-    const lgfx::IFont *f = asciiOnly(s) ? fit(s, maxW, {FONT_HUGE, FONT_NUM, FONT_NUMS})
+    const lgfx::IFont *f = asciiOnly(s) ? fit(s, maxW, {FONT_HUGE, FONT_NUM, FONT_NUMS, FONT_NUMXS})
                                         : fit(s, maxW, {FONT_BIG, FONT_TEXT});
     centered(s, y, f, col, maxW);
+}
+
+/// Width of a + b drawn as one line (a in fa, b in fb, 8 px between), at most maxW.
+static int pairWidth(const String &a, const lgfx::IFont *fa, const String &b, const lgfx::IFont *fb, int maxW) {
+    canvas.setFont(fa);
+    int w = min((int)canvas.textWidth(a), maxW);
+    canvas.setFont(fb);
+    if (b.length()) w += canvas.textWidth(b) + 8;
+    return min(w, maxW);
+}
+
+/// a + b as one centred line, each in its own font and colour.
+static void pairText(int y, const String &a, const lgfx::IFont *fa, uint16_t ca,
+                     const String &b, const lgfx::IFont *fb, uint16_t cb, int maxW) {
+    canvas.setFont(fa);
+    int w1 = min((int)canvas.textWidth(a), maxW);
+    int x = CX - pairWidth(a, fa, b, fb, maxW) / 2;
+    text(a, x, y, fa, ca, maxW, middle_left);
+    if (b.length()) text(b, x + w1 + 8, y, fb, cb, max(10, maxW - w1 - 8), middle_left);
+}
+
+/// The call part of a banner, as large as fits. A "-SSID" suffix (DB1MGN-APP)
+/// is drawn small after the call when that still fits; otherwise the call
+/// alone is drawn and the suffix is returned for the caller to show elsewhere.
+static String drawCall(const String &call, int y, uint16_t col, int maxW) {
+    int dash = call.indexOf('-');
+    String main = call, suffix;
+    if (dash > 0 && dash < (int)call.length() - 1 && asciiOnly(call)) {
+        main = call.substring(0, dash);
+        suffix = call.substring(dash);
+    }
+    const lgfx::IFont *f = asciiOnly(main) ? fit(main, maxW, {FONT_HUGE, FONT_NUM, FONT_NUMS, FONT_NUMXS})
+                                           : fit(main, maxW, {FONT_BIG, FONT_TEXT});
+    canvas.setFont(f);
+    int w1 = min((int)canvas.textWidth(main), maxW);
+    int bottom = y + canvas.fontHeight() / 2;
+    canvas.setFont(FONT_NUMXS);
+    int w2 = suffix.length() ? canvas.textWidth(suffix) + 4 : 0;
+    if (!w2 || w1 + w2 > maxW) { centered(main, y, f, col, maxW); return suffix; }
+    int x = CX - (w1 + w2) / 2;
+    text(main, x, y, f, col, maxW, middle_left);
+    text(suffix, x + w1 + 4, bottom, FONT_NUMXS, C_DIM, w2, bottom_left);   // baselines aligned
+    return "";
 }
 
 /// Segmented 270° gauge (gap at the bottom).
@@ -331,7 +376,7 @@ static void drawRing() {
 /// Top line: banner while receiving/sending, otherwise the host's status line.
 static void drawHeader() {
     const Home &h = dlink::home;
-    if (!callLayout && h.banner.length() && (h.ring == "rx" || h.ring == "tx")) {
+    if (h.banner.length() && (h.ring == "rx" || h.ring == "tx")) {
         bool tx = h.ring == "tx";
         pill(40, 24, tx ? C_RED : C_GREEN, h.banner, FONT_TEXT, tx ? C_FG : C_BG, 150);
     } else if (h.top.length()) {
@@ -339,29 +384,9 @@ static void drawHeader() {
     }
 }
 
-/// Width of pill + pill2 drawn as one line (pill in f1, pill2 in f2), at most maxW.
-static int pillWidth(const lgfx::IFont *f1, const lgfx::IFont *f2, int maxW) {
-    const Home &h = dlink::home;
-    canvas.setFont(f1);
-    int w = min((int)canvas.textWidth(h.pill), maxW);
-    canvas.setFont(f2);
-    if (h.pill2.length()) w += canvas.textWidth(h.pill2) + 8;
-    return min(w, maxW);
-}
-
-/// pill + pill2 as one centred line, pill in the accent colour, pill2 in white.
-static void pillText(int y, const lgfx::IFont *f1, const lgfx::IFont *f2, uint16_t ac, int maxW) {
-    const Home &h = dlink::home;
-    canvas.setFont(f1);
-    int w1 = min((int)canvas.textWidth(h.pill), maxW);
-    int x = CX - pillWidth(f1, f2, maxW) / 2;
-    text(h.pill, x, y, f1, ac, maxW, middle_left);
-    if (h.pill2.length()) text(h.pill2, x + w1 + 8, y, f2, C_FG, max(10, maxW - w1 - 8), middle_left);
-}
-
-/// Rounded panel at the bottom of the home screen.
-static void bottomPanel(int w) {
-    canvas.fillSmoothRoundRect(CX - w / 2 - 12, CY + 54 - 15, w + 24, 30, 15, C_PANEL);
+/// Rounded panel at the bottom of the home screen, w = width of its text.
+static void panel(int y, int h, int w) {
+    canvas.fillSmoothRoundRect(CX - w / 2 - 12, y - h / 2, w + 24, h, h / 2, C_PANEL);
 }
 
 /// Default layout: big value in the centre, label under it, pill at the bottom.
@@ -376,48 +401,59 @@ static void drawHomeValue() {
         if (h.label.length()) centered(h.label, CY + 28, FONT_SMALL, C_DIM, 160);
     }
     if (h.pill.length() || h.pill2.length()) {
-        bottomPanel(pillWidth(FONT_TEXT, FONT_SMALL, 130));
-        pillText(CY + 55, FONT_TEXT, FONT_SMALL, ac, 130);
+        panel(CY + 54, 30, pairWidth(h.pill, FONT_TEXT, h.pill2, FONT_SMALL, 130));
+        pairText(CY + 55, h.pill, FONT_TEXT, ac, h.pill2, FONT_SMALL, C_FG, 130);
     }
 }
 
-/// Call layout: the banner (talker call) large in the centre, pill (talkgroup)
-/// under it, the host's big value and label in the panel at the bottom.
+/// pill as number + name: pill2 is the name when the host sends it, otherwise
+/// the pill is split at its first space when it starts with a digit ("96126 Haßberge").
+static void pillParts(String &num, String &name) {
+    const Home &h = dlink::home;
+    int sp = h.pill.indexOf(' ');
+    if (h.pill2.length()) { num = h.pill; name = h.pill2; }
+    else if (sp > 0 && h.pill[0] >= '0' && h.pill[0] <= '9') { num = h.pill.substring(0, sp); name = h.pill.substring(sp + 1); }
+    else { num = h.pill; name = ""; }
+}
+
+/// Call layout, top to bottom: talkgroup number, the banner's call sign large,
+/// the talker's name (banner after the first space), talkgroup name, and the
+/// host's big value with its label in the panel at the bottom.
 static void drawHomeCall() {
     const Home &h = dlink::home;
     uint16_t ac = named(h.accent);
     bool live = h.banner.length() && (h.ring == "rx" || h.ring == "tx");
-    if (lastCall.length()) {
+    String tg, tgName;
+    pillParts(tg, tgName);
+    if (tg.length())
+        centered(tg, CY - 66, asciiOnly(tg) ? fit(tg, 112, {FONT_NUMS, FONT_NUMXS}) : FONT_TEXT, ac, 112);
+    int sp = lastCall.indexOf(' ');
+    String call = sp > 0 ? lastCall.substring(0, sp) : lastCall;
+    String name = sp > 0 ? lastCall.substring(sp + 1) : String();
+    if (call.length()) {
         uint16_t c = !live ? C_FG : h.ring == "tx" ? C_RED : C_GREEN;
-        bigValue(lastCall, CY - 8, c, h.hasGauge ? 170 : 200);
+        String suffix = drawCall(call, CY - 14, c, h.hasGauge ? 180 : 200);
+        if (suffix.length() || name.length())
+            pairText(CY + 18, suffix, FONT_NUMXS, C_DIM, name, FONT_TEXT, C_FG, 180);
     } else {
-        centered("—", CY - 8, FONT_BIG, C_FAINT);
+        centered("—", CY - 14, FONT_BIG, C_FAINT);
     }
-    if (h.pill.length() || h.pill2.length()) pillText(CY + 30, FONT_TEXT, FONT_TEXT, ac, 170);
+    if (tgName.length()) centered(tgName, CY + 36, FONT_TEXT, ac, 170);
     if (h.muted) {
         canvas.setFont(FONT_TEXT);
-        bottomPanel(canvas.textWidth("STUMM") + 4);
-        centered("STUMM", CY + 55, FONT_TEXT, C_ORANGE);
+        panel(CY + 59, 28, canvas.textWidth("STUMM") + 4);
+        centered("STUMM", CY + 60, FONT_TEXT, C_ORANGE);
     } else if (h.big.length() || h.label.length()) {
-        canvas.setFont(FONT_SMALL);
-        int w1 = h.label.length() ? canvas.textWidth(h.label) + 8 : 0;
-        canvas.setFont(FONT_TEXT);
-        int w2 = canvas.textWidth(h.big);
-        int w = min(w1 + w2, 130);
-        bottomPanel(w);
-        int x = CX - w / 2;
-        if (h.label.length()) text(h.label, x, CY + 55, FONT_SMALL, C_DIM, 130, middle_left);
-        text(h.big, x + w1, CY + 55, FONT_TEXT, C_FG, max(10, 130 - w1), middle_left);
+        panel(CY + 59, 28, pairWidth(h.label, FONT_SMALL, h.big, FONT_TEXT, 110));
+        pairText(CY + 60, h.label, FONT_SMALL, C_DIM, h.big, FONT_TEXT, C_FG, 110);
     }
 }
 
 static void drawHome() {
     const Home &h = dlink::home;
-    if (h.banner.length()) lastCall = h.banner;
     if (h.hasGauge) gauge(h.gauge, h.gaugeMax, h.muted ? C_ORANGE : named(h.accent), 108, 96);
-    drawHeader();
-    if (callLayout) drawHomeCall();
-    else drawHomeValue();
+    if (callLayout) drawHomeCall();         // no header: the talkgroup number takes its place
+    else { drawHeader(); drawHomeValue(); }
 }
 
 /// State of an entry as a short pill under its label in the menu.
@@ -718,6 +754,8 @@ static void tick() {
     }
     if (dlink::version != seenVersion) {
         seenVersion = dlink::version;
+        if (dlink::home.pill != lastPill) { lastPill = dlink::home.pill; lastCall = ""; }  // new talkgroup: old call is stale
+        if (dlink::home.banner.length()) lastCall = dlink::home.banner;
         if (mode == Mode::Menu) buildEntries();
         if ((mode == Mode::List || mode == Mode::Range) && !openItem()) setMode(Mode::Home);
         if (mode == Mode::Range && !rangeDirty && now - lastInput > 1000) {
