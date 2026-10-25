@@ -1,0 +1,154 @@
+# Builds the M5Stack Dial firmware.
+# - every push / PR: build + upload as workflow artifact
+# - tag v*: additionally create a GitHub release and publish the web-flasher
+#   files (merged binary + ESP Web Tools manifest) to GitHub Pages
+name: firmware
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  pull_request:
+    paths: ["firmware/**", ".github/workflows/firmware.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Install PlatformIO and esptool
+        run: pip install platformio "esptool==4.8.1"
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then v="$GITHUB_REF_NAME"; else v="dev-${GITHUB_SHA::7}"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        working-directory: firmware
+        run: pio run -e m5dial
+
+      - name: Merge into single flash image
+        run: |
+          B=firmware/.pio/build/m5dial
+          BOOT_APP0=~/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin
+          mkdir -p dist
+          # ESP32-S3 layout: bootloader 0x0, partitions 0x8000, otadata 0xe000, app 0x10000
+          esptool.py --chip esp32s3 merge_bin -o dist/trx-dial-merged.bin \
+            --flash_mode keep --flash_freq keep --flash_size keep \
+            0x0     "$B/bootloader.bin" \
+            0x8000  "$B/partitions.bin" \
+            0xe000  "$BOOT_APP0" \
+            0x10000 "$B/firmware.bin"
+          cp "$B/firmware.bin" dist/trx-dial-app.bin
+          ls -la dist
+
+      - name: Write ESP Web Tools manifest and flash page
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          cat > dist/manifest.json <<EOF
+          {
+            "name": "TRX-Dial",
+            "version": "${VERSION}",
+            "new_install_prompt_erase": true,
+            "builds": [
+              {
+                "chipFamily": "ESP32-S3",
+                "parts": [{ "path": "trx-dial-merged.bin", "offset": 0 }]
+              }
+            ]
+          }
+          EOF
+          cat > dist/index.html <<'EOF'
+          <!doctype html>
+          <html lang="de">
+          <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>TRX-Dial Flasher</title>
+            <script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js"></script>
+            <style>
+              body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+            </style>
+          </head>
+          <body>
+            <h1>TRX-Dial auf den M5Stack Dial flashen</h1>
+            <ol>
+              <li>Chrome oder Edge am PC verwenden.</li>
+              <li>Dial per USB-C-Datenkabel anschließen.</li>
+              <li>Auf „Installieren“ klicken und den Port wählen.</li>
+            </ol>
+            <esp-web-install-button manifest="manifest.json">
+              <span slot="unsupported">Dieser Browser kann nicht flashen. Bitte Chrome oder Edge am PC nutzen.</span>
+              <span slot="not-allowed">Seite muss über HTTPS geladen werden.</span>
+            </esp-web-install-button>
+            <p>Danach meldet sich der Dial per Bluetooth als <b>TRX-Dial</b>.</p>
+          </body>
+          </html>
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: trx-dial-${{ steps.ver.outputs.version }}
+          path: dist/
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: trx-dial-${{ needs.build.outputs.version }}
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/trx-dial-merged.bin
+            dist/trx-dial-app.bin
+
+  pages:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: trx-dial-${{ needs.build.outputs.version }}
+          path: dist
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - id: deploy
+        uses: actions/deploy-pages@v4
