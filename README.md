@@ -22,7 +22,13 @@ or needs a confirmation.
 - **Menu**: long press, or tap the screen. Turn to choose, press (or tap the item) to open it.
   Lists (talkgroups, bands, modes) open as a scrolling list, values as a gauge,
   switches toggle in place.
-- The dial adds its own entries after the host's: brightness, confirmation beeps, back.
+- The dial adds its own entries after the host's: brightness, confirmation beeps,
+  "Call groß" (call layout), back.
+- **Call layout** (menu, `Call groß`, kept in flash), top to bottom: talkgroup number,
+  the last received call sign large (green while receiving, red while sending; a
+  `-SSID` suffix small after it), the talker's name, the talkgroup name, and the host's
+  value (volume) in the box at the bottom. A talkgroup name that does not fit scrolls
+  as a marquee. Off by default, which keeps the value (volume, VFO frequency) in the centre.
 - Every screen falls back to the home screen after 8 s without input.
 - Outer ring: blue = connected, green = receiving, red = transmitting, grey = not connected.
 
